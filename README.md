@@ -1,17 +1,35 @@
 # KernelLook
-simple kernel driver and user mode app to do some magic
+The driver and user-mode application presented here provide a solution for retrieving process and module information from the Windows kernel. The driver, named "ModuleList," exposes two IOCTL commands that can be invoked by the user-mode application to retrieve a list of running processes and their associated modules.
 
+Features:
 
-This kernel-mode driver is built for the Microsoft Windows operating system and uses the Windows Driver Model (WDM). It primarily serves two functions:
+Driver Functionality:
 
-Listing Process IDs (IOCTL_GET_PROCESS_IDS): This function retrieves the process identifier (PID) and the name of all running processes on the system. It uses the ZwQuerySystemInformation function to get the process information, which is returned to the user-mode application as an array of PROCESS_INFO structures.
+Retrieves a list of process IDs and names from the Windows kernel.
+Retrieves a list of loaded modules for a specified process.
+Implements error checking and robustness to handle various scenarios.
+Uses safe memory access techniques to prevent crashes and security vulnerabilities.
+User-Mode Application Functionality:
 
-Listing Loaded Modules for a Specific Process (IOCTL_GET_MODULES): This function retrieves all loaded modules (e.g., DLLs) for a specified process, using the PID. It first locates the process using the PsLookupProcessByProcessId function. Then, it traverses the loaded module list linked to the process's PEB (Process Environment Block), returning the base address, size, and name of each module in an array of MODULE_INFO structures.
+Communicates with the driver through IOCTL commands.
+Requests process information and displays the process names and IDs to the user.
+Prompts the user to select a process ID for further inspection.
+Requests module information for the selected process and displays the module details.
+How It Works:
 
-The driver uses IOCTL (I/O Control) codes to receive commands from a user-mode application via a DeviceIoControl function. This design allows for the easy expansion of the driver's functionalities.
+Driver:
 
-The device created by this driver is named "ModuleList", and it communicates with the user-mode application through the DispatchIoctl function, which handles the IOCTL codes. Additionally, it implements standard create and close dispatch functions for opening and closing a handle to the driver.
+Upon loading, creates a device object and symbolic link for communication with user-mode applications.
+Implements dispatch routines for Create, Close, and IOCTL requests.
+Handles IOCTL_GET_PROCESS_IDS by querying the system for process information and copying it to the output buffer.
+Handles IOCTL_GET_MODULES by retrieving the loaded modules for a specified process ID and copying the information to the output buffer.
+User-Mode Application:
 
-Finally, the driver can be unloaded safely, cleaning up the device and symbolic link that it created during its initialization.
-
-From a user-mode application's perspective, this driver provides valuable insights about the running processes and their loaded modules, which can be used for a variety of purposes such as system monitoring, debugging, malware analysis, etc. The application can use the DeviceIoControl function to communicate with the driver, passing the appropriate IOCTL code and receiving the required information. The information returned by the driver can then be used for further analysis or action based on the application's purpose.
+Connects to the driver by opening the device using the symbolic link.
+Sends IOCTL_GET_PROCESS_IDS request to retrieve the process information from the driver.
+Displays the process names and IDs to the user.
+Prompts the user to select a process ID.
+Sends IOCTL_GET_MODULES request with the selected process ID to retrieve the module information from the driver.
+Displays the module details to the user.
+Benefits for Security Professionals:
+The ModuleList driver and user-mode application provide security professionals with a convenient tool for inspecting running processes and loaded modules on a Windows system. It can aid in security assessments, malware analysis, and forensic investigations by providing an overview of the system's running processes and their associated modules. This information can help identify malicious processes, detect abnormal behavior, and analyze the impact of potential security threats. With error checking and robustness measures implemented, the solution ensures reliable and safe retrieval of process and module information from the Windows kernel.
