@@ -74,7 +74,7 @@ typedef struct _LDR_DATA_TABLE_ENTRY {
     PVOID DllBase;
     PVOID EntryPoint;
     PVOID Reserved2[3];
-    UNICODE_STRING FullDllName; // use FullDllName instead of BaseDllName
+    UNICODE_STRING FullDllName;
     ULONG Reserved3[8];
     PVOID Reserved4[3];
     LIST_ENTRY InMemoryOrderLinks;
