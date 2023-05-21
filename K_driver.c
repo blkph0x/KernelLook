@@ -10,6 +10,9 @@
 #define IOCTL_GET_PROCESS_IDS CTL_CODE(FILE_DEVICE_UNKNOWN, 0x800, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_GET_MODULES CTL_CODE(FILE_DEVICE_UNKNOWN, 0x801, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
+#define MAX_PROCESS_INFO_COUNT 1000 // Maximum number of process info entries
+#define MAX_MODULE_INFO_COUNT 1000  // Maximum number of module info entries
+
 typedef struct _PEB_LDR_DATA {
     UCHAR Reserved1[8];
     PVOID Reserved2[3];
@@ -73,6 +76,7 @@ typedef struct _LDR_DATA_TABLE_ENTRY {
     PVOID Reserved1[2];
     PVOID DllBase;
     PVOID EntryPoint;
+    ULONG SizeOfImage;
     PVOID Reserved2[3];
     UNICODE_STRING FullDllName;
     ULONG Reserved3[8];
@@ -87,18 +91,21 @@ NTSTATUS GetProcessIds(PPROCESS_INFO ProcessInfo, ULONG ProcessInfoCount, PULONG
     ULONG bufferSize = 0;
     ULONG actualCount = 0;
 
+    // Get size of the information to be gathered.
     status = ZwQuerySystemInformation(SystemProcessInformation, NULL, 0, &bufferSize);
     if (status != STATUS_INFO_LENGTH_MISMATCH)
     {
         return status;
     }
 
+    // Allocate memory for the buffer.
     processInfoBuffer = ExAllocatePoolWithTag(NonPagedPool, bufferSize, 'Proc');
     if (processInfoBuffer == NULL)
     {
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
+    // Get the system information.
     status = ZwQuerySystemInformation(SystemProcessInformation, processInfoBuffer, bufferSize, NULL);
     if (!NT_SUCCESS(status))
     {
@@ -107,29 +114,11 @@ NTSTATUS GetProcessIds(PPROCESS_INFO ProcessInfo, ULONG ProcessInfoCount, PULONG
     }
 
     PSYSTEM_PROCESS_INFORMATION processInfo = (PSYSTEM_PROCESS_INFORMATION)processInfoBuffer;
-    while (TRUE)
+    while (actualCount < ProcessInfoCount)
     {
-        if (actualCount >= ProcessInfoCount)
-        {
-            status = STATUS_BUFFER_OVERFLOW;
-            break;
-        }
-
-        __try
-        {
-            ProbeForWrite(&ProcessInfo[actualCount], sizeof(PROCESS_INFO), sizeof(ULONG_PTR));
-        }
-        __except (EXCEPTION_EXECUTE_HANDLER)
-        {
-            status = GetExceptionCode();
-            break;
-        }
-
+        ProcessInfo[actualCount].ProcessId = processInfo->ProcessId;
         RtlCopyMemory(ProcessInfo[actualCount].Name, processInfo->ImageName.Buffer, processInfo->ImageName.Length);
         ProcessInfo[actualCount].Name[processInfo->ImageName.Length / sizeof(WCHAR)] = UNICODE_NULL;
-
-
-
 
         actualCount++;
 
@@ -138,122 +127,66 @@ NTSTATUS GetProcessIds(PPROCESS_INFO ProcessInfo, ULONG ProcessInfoCount, PULONG
             break;
         }
 
-        processInfo = (PSYSTEM_PROCESS_INFORMATION)((PCHAR)processInfo + processInfo->NextEntryOffset);
+        processInfo = (PSYSTEM_PROCESS_INFORMATION)((PUCHAR)processInfo + processInfo->NextEntryOffset);
     }
 
     *ReturnLength = actualCount * sizeof(PROCESS_INFO);
 
     ExFreePool(processInfoBuffer);
-
     return status;
 }
 
-NTSTATUS GetLoadedModules(ULONG ProcessId, PMODULE_INFO ModuleInfo, ULONG ModuleInfoCount, PULONG ReturnLength)
+NTSTATUS GetLoadedModules(HANDLE ProcessId, PMODULE_INFO ModuleInfo, ULONG ModuleInfoCount, PULONG ReturnLength)
 {
-    PEPROCESS Process = NULL;
-    NTSTATUS Status = STATUS_SUCCESS;
-    ULONG ActualCount = 0;
+    PEPROCESS process = NULL;
+    PPEB peb = NULL;
+    PLIST_ENTRY listEntry = NULL;
+    PLDR_DATA_TABLE_ENTRY ldrEntry = NULL;
+    NTSTATUS status = STATUS_SUCCESS;
+    ULONG actualCount = 0;
 
-    // Get the EPROCESS structure of the target process
-    Status = PsLookupProcessByProcessId((HANDLE)ProcessId, &Process);
-    if (!NT_SUCCESS(Status))
+    // Retrieve the process object.
+    status = PsLookupProcessByProcessId(ProcessId, &process);
+    if (!NT_SUCCESS(status))
     {
-        Process = NULL; // Ensure Process is NULL on failure
-        goto Cleanup;
+        return status;
     }
 
-    // Validate the process ID
-    if (!PsGetProcessWow64Process(Process))
+    // Retrieve the PEB address.
+    peb = (PPEB)PsGetProcessWow64Process(process);
+    if (peb == NULL)
     {
-        Status = STATUS_INVALID_PARAMETER;
-        goto Cleanup;
+        ObDereferenceObject(process);
+        return STATUS_UNSUCCESSFUL;
     }
 
-    __try
+    // Retrieve the first module.
+    listEntry = peb->Ldr->InLoadOrderModuleList.Flink;
+    ldrEntry = CONTAINING_RECORD(listEntry, LDR_DATA_TABLE_ENTRY, InLoadOrderLinks);
+    while (actualCount < ModuleInfoCount)
     {
-        PVOID Peb = PsGetProcessWow64Process(Process);
-        if (Peb == NULL)
+        ProbeForRead(ldrEntry, sizeof(LDR_DATA_TABLE_ENTRY), 1);
+
+        ModuleInfo[actualCount].Base = ldrEntry->DllBase;
+        ModuleInfo[actualCount].Size = ldrEntry->SizeOfImage;
+        RtlCopyMemory(ModuleInfo[actualCount].Name, ldrEntry->FullDllName.Buffer, ldrEntry->FullDllName.Length);
+        ModuleInfo[actualCount].Name[ldrEntry->FullDllName.Length / sizeof(WCHAR)] = UNICODE_NULL;
+
+        actualCount++;
+
+        if (listEntry == peb->Ldr->InLoadOrderModuleList.Blink)
         {
-            Status = STATUS_UNSUCCESSFUL;
-            goto Cleanup;
+            break;
         }
 
-        PPEB_LDR_DATA LdrData = (PPEB_LDR_DATA)((PPEB)Peb)->Ldr;
-        PLIST_ENTRY LdrList = LdrData->InLoadOrderModuleList.Flink;
-        PLIST_ENTRY LastEntry = &LdrData->InLoadOrderModuleList;
-
-        while (LdrList != LastEntry)
-        {
-            if (ActualCount >= ModuleInfoCount)
-            {
-                Status = STATUS_BUFFER_OVERFLOW;
-                break;
-            }
-
-            PLDR_DATA_TABLE_ENTRY LdrEntry = CONTAINING_RECORD(LdrList, LDR_DATA_TABLE_ENTRY, InLoadOrderLinks);
-
-            // Validate ModuleInfo pointer
-            __try
-            {
-                ProbeForWrite(ModuleInfo, sizeof(MODULE_INFO), sizeof(ULONG_PTR));
-            }
-            __except (EXCEPTION_EXECUTE_HANDLER)
-            {
-                Status = GetExceptionCode();
-                goto Cleanup;
-            }
-
-            ModuleInfo[ActualCount].Base = LdrEntry->DllBase;
-            if (LdrEntry->Reserved3 != NULL) {
-                ModuleInfo[ActualCount].Size = *(LdrEntry->Reserved3);
-            }
-
-            // Get the length to copy, ensuring it does not exceed the buffer size
-            size_t nameLength = LdrEntry->FullDllName.Length;
-            if (nameLength > (MAX_PATH - 1) * sizeof(WCHAR))
-            {
-                nameLength = (MAX_PATH - 1) * sizeof(WCHAR);
-            }
-
-            __try
-            {
-                RtlCopyMemory(ModuleInfo[ActualCount].Name, LdrEntry->FullDllName.Buffer, nameLength);
-                ModuleInfo[ActualCount].Name[nameLength / sizeof(WCHAR)] = UNICODE_NULL;
-            }
-            __except (EXCEPTION_EXECUTE_HANDLER)
-            {
-                Status = GetExceptionCode();
-                goto Cleanup;
-            }
-
-            ActualCount++;
-            LdrList = LdrList->Flink;
-        }
-
-        if (ActualCount > 0 && ActualCount < ModuleInfoCount)
-        {
-            Status = STATUS_BUFFER_OVERFLOW;
-        }
-    }
-    __finally
-    {
-        if (Process != NULL)
-        {
-            ObDereferenceObject(Process);
-        }
+        listEntry = listEntry->Flink;
+        ldrEntry = CONTAINING_RECORD(listEntry, LDR_DATA_TABLE_ENTRY, InLoadOrderLinks);
     }
 
-Cleanup:
-    if (NT_SUCCESS(Status))
-    {
-        *ReturnLength = ActualCount * sizeof(MODULE_INFO);
-    }
-    else
-    {
-        *ReturnLength = 0;
-    }
+    *ReturnLength = actualCount * sizeof(MODULE_INFO);
 
-    return Status;
+    ObDereferenceObject(process);
+    return status;
 }
 
 NTSTATUS DispatchCreateClose(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
@@ -280,39 +213,16 @@ NTSTATUS DispatchIoctl(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
 
     if (controlCode == IOCTL_GET_PROCESS_IDS)
     {
-        // The output buffer is an array of PROCESS_INFO structures
-        if (pIrp->MdlAddress == NULL || pIrp->MdlAddress->MappedSystemVa == NULL || pIoStackLocation->Parameters.DeviceIoControl.OutputBufferLength < sizeof(PROCESS_INFO))
+        if (pIrp->AssociatedIrp.SystemBuffer == NULL || pIoStackLocation->Parameters.DeviceIoControl.OutputBufferLength < sizeof(PROCESS_INFO))
         {
             status = STATUS_INVALID_PARAMETER;
             goto Exit;
         }
 
-        PPROCESS_INFO processInfo = (PPROCESS_INFO)MmGetSystemAddressForMdlSafe(pIrp->MdlAddress, NormalPagePriority);
-        if (processInfo == NULL)
-        {
-            status = STATUS_INSUFFICIENT_RESOURCES;
-            goto Exit;
-        }
-
+        PPROCESS_INFO processInfo = (PPROCESS_INFO)pIrp->AssociatedIrp.SystemBuffer;
         ULONG processInfoCount = pIoStackLocation->Parameters.DeviceIoControl.OutputBufferLength / sizeof(PROCESS_INFO);
 
-        // Validate processInfoCount and processInfo
-        if (processInfoCount == 0)
-        {
-            status = STATUS_INVALID_PARAMETER;
-            goto Exit;
-        }
-
-        __try
-        {
-            // Get the process IDs
-            status = GetProcessIds(processInfo, processInfoCount, &returnLength);
-        }
-        __except (EXCEPTION_EXECUTE_HANDLER)
-        {
-            status = GetExceptionCode();
-        }
-
+        status = GetProcessIds(processInfo, processInfoCount, &returnLength);
         if (!NT_SUCCESS(status))
         {
             goto Exit;
@@ -320,59 +230,17 @@ NTSTATUS DispatchIoctl(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
     }
     else if (controlCode == IOCTL_GET_MODULES)
     {
-        // The input buffer is the process ID
-        if (pIrp->AssociatedIrp.SystemBuffer == NULL || pIoStackLocation->Parameters.DeviceIoControl.InputBufferLength < sizeof(ULONG))
+        if (pIrp->AssociatedIrp.SystemBuffer == NULL || pIoStackLocation->Parameters.DeviceIoControl.InputBufferLength < sizeof(HANDLE) || pIoStackLocation->Parameters.DeviceIoControl.OutputBufferLength < sizeof(MODULE_INFO))
         {
             status = STATUS_INVALID_PARAMETER;
             goto Exit;
         }
 
-        // Probe for read the process ID buffer
-        __try
-        {
-            ProbeForRead(pIrp->AssociatedIrp.SystemBuffer, sizeof(ULONG), sizeof(ULONG));
-        }
-        __except (EXCEPTION_EXECUTE_HANDLER)
-        {
-            status = GetExceptionCode();
-            goto Exit;
-        }
+        PHANDLE pProcessId = (PHANDLE)pIrp->AssociatedIrp.SystemBuffer;
+        PMODULE_INFO moduleInfo = (PMODULE_INFO)pIrp->AssociatedIrp.SystemBuffer;
+        ULONG moduleInfoCount = (pIoStackLocation->Parameters.DeviceIoControl.OutputBufferLength - sizeof(HANDLE)) / sizeof(MODULE_INFO);
 
-        ULONG processId = *(ULONG*)pIrp->AssociatedIrp.SystemBuffer;
-
-        // The output buffer is an array of MODULE_INFO structures
-        if (pIrp->MdlAddress == NULL || pIrp->MdlAddress->MappedSystemVa == NULL || pIoStackLocation->Parameters.DeviceIoControl.OutputBufferLength < sizeof(MODULE_INFO))
-        {
-            status = STATUS_INVALID_PARAMETER;
-            goto Exit;
-        }
-
-        PMODULE_INFO moduleInfo = (PMODULE_INFO)MmGetSystemAddressForMdlSafe(pIrp->MdlAddress, NormalPagePriority);
-        if (moduleInfo == NULL)
-        {
-            status = STATUS_INSUFFICIENT_RESOURCES;
-            goto Exit;
-        }
-
-        ULONG moduleInfoCount = pIoStackLocation->Parameters.DeviceIoControl.OutputBufferLength / sizeof(MODULE_INFO);
-
-        // Validate moduleInfoCount and moduleInfo
-        if (moduleInfoCount == 0)
-        {
-            status = STATUS_INVALID_PARAMETER;
-            goto Exit;
-        }
-
-        __try
-        {
-            // Get the loaded modules of the process
-            status = GetLoadedModules(processId, moduleInfo, moduleInfoCount, &returnLength);
-        }
-        __except (EXCEPTION_EXECUTE_HANDLER)
-        {
-            status = GetExceptionCode();
-        }
-
+        status = GetLoadedModules(*pProcessId, moduleInfo, moduleInfoCount, &returnLength);
         if (!NT_SUCCESS(status))
         {
             goto Exit;
