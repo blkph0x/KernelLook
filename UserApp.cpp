@@ -67,14 +67,14 @@ int main()
     printf("Process Info:\n");
     for (DWORD i = 0; i < bytesReturned / sizeof(PROCESS_INFO); i++)
     {
-        printf("Process ID: %lu, Name: %ls\n", pProcessInfo[i].ProcessId, pProcessInfo[i].Name);
+        printf("Process ID: %p, Name: %p\n", pProcessInfo[i].ProcessId, pProcessInfo[i].Name);
     }
     printf("\n");
 
     // Prompt user to enter a process ID for module info
     printf("Enter a process ID to get module info: ");
-    DWORD processId = 0;
-    scanf_s("%lu", &processId);
+    HANDLE processId = 0;
+    scanf_s("%p", &processId);
 
     // Prepare input buffer with process ID
     BYTE inputBuffer[sizeof(HANDLE)] = { 0 };
