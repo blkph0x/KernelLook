@@ -1,0 +1,2 @@
+C:\Users\Blkph0x\Desktop\Driverdev\x64\Release\KMDFDriver5.sys
+C:\Users\Blkph0x\Documents\GitHub\KernelLook\Driver\x64\Release\KMDFDriver5.sys
