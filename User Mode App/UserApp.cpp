@@ -30,6 +30,7 @@ int main()
         printf("Failed to open device. Error: %d\n", GetLastError());
         return 1;
     }
+    printf("Successfully opened the device.\n");
 
     // Get the required buffer size for process info
     ULONG processInfoSize = 0;
@@ -41,6 +42,7 @@ int main()
             CloseHandle(hDevice);
             return 1;
         }
+        printf("Obtained required process info size.\n");
 
         processInfoSize = bytesReturned;
     }
@@ -53,6 +55,7 @@ int main()
         CloseHandle(hDevice);
         return 1;
     }
+    printf("Successfully allocated memory for process info.\n");
 
     // Get process info
     if (!DeviceIoControl(hDevice, IOCTL_GET_PROCESS_IDS, NULL, 0, pProcessInfo, processInfoSize, &bytesReturned, NULL))
@@ -62,6 +65,7 @@ int main()
         CloseHandle(hDevice);
         return 1;
     }
+    printf("Successfully obtained process info.\n");
 
     // Print process info
     printf("Process Info:\n");
@@ -91,6 +95,7 @@ int main()
             CloseHandle(hDevice);
             return 1;
         }
+        printf("Obtained required module info size.\n");
 
         moduleInfoSize = bytesReturned;
     }
@@ -104,6 +109,7 @@ int main()
         CloseHandle(hDevice);
         return 1;
     }
+    printf("Successfully allocated memory for module info.\n");
 
     // Get module info
     if (!DeviceIoControl(hDevice, IOCTL_GET_MODULES, inputBuffer, sizeof(HANDLE), pModuleInfo, moduleInfoSize, &bytesReturned, NULL))
@@ -114,6 +120,7 @@ int main()
         CloseHandle(hDevice);
         return 1;
     }
+    printf("Successfully obtained module info.\n");
 
     // Print module info
     printf("Module Info:\n");
@@ -126,6 +133,7 @@ int main()
     HeapFree(GetProcessHeap(), 0, pModuleInfo);
     HeapFree(GetProcessHeap(), 0, pProcessInfo);
     CloseHandle(hDevice);
+    printf("Cleaned up resources and closing the application.\n");
 
     return 0;
 }
