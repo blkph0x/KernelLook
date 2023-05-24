@@ -84,8 +84,15 @@ typedef struct _LDR_DATA_TABLE_ENTRY {
     LIST_ENTRY InMemoryOrderLinks;
 } LDR_DATA_TABLE_ENTRY, * PLDR_DATA_TABLE_ENTRY;
 
+// Logging macros
+#define LogFunctionEntry() DbgPrint("[%s] Entering: %s\n", __FUNCTION__, __FUNCTION__)
+#define LogFunctionExit() DbgPrint("[%s] Exiting: %s\n", __FUNCTION__, __FUNCTION__)
+#define LogMessage(format, ...) DbgPrint("[%s] " format "\n", __FUNCTION__, __VA_ARGS__)
+
 NTSTATUS GetProcessIds(PPROCESS_INFO ProcessInfo, ULONG ProcessInfoCount, PULONG ReturnLength)
 {
+    LogFunctionEntry();
+
     PVOID processInfoBuffer = NULL;
     NTSTATUS status = STATUS_SUCCESS;
     ULONG bufferSize = 0;
@@ -95,6 +102,7 @@ NTSTATUS GetProcessIds(PPROCESS_INFO ProcessInfo, ULONG ProcessInfoCount, PULONG
     status = ZwQuerySystemInformation(SystemProcessInformation, NULL, 0, &bufferSize);
     if (status != STATUS_INFO_LENGTH_MISMATCH)
     {
+        LogMessage("Failed to get process information size. Error: 0x%X", status);
         return status;
     }
 
@@ -102,6 +110,7 @@ NTSTATUS GetProcessIds(PPROCESS_INFO ProcessInfo, ULONG ProcessInfoCount, PULONG
     processInfoBuffer = ExAllocatePoolWithTag(NonPagedPool, bufferSize, 'Proc');
     if (processInfoBuffer == NULL)
     {
+        LogMessage("Failed to allocate memory for process information");
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
@@ -109,6 +118,7 @@ NTSTATUS GetProcessIds(PPROCESS_INFO ProcessInfo, ULONG ProcessInfoCount, PULONG
     status = ZwQuerySystemInformation(SystemProcessInformation, processInfoBuffer, bufferSize, NULL);
     if (!NT_SUCCESS(status))
     {
+        LogMessage("Failed to query system information. Error: 0x%X", status);
         ExFreePool(processInfoBuffer);
         return status;
     }
@@ -133,11 +143,15 @@ NTSTATUS GetProcessIds(PPROCESS_INFO ProcessInfo, ULONG ProcessInfoCount, PULONG
     *ReturnLength = actualCount * sizeof(PROCESS_INFO);
 
     ExFreePool(processInfoBuffer);
+
+    LogFunctionExit();
     return status;
 }
 
 NTSTATUS GetLoadedModules(HANDLE ProcessId, PMODULE_INFO ModuleInfo, ULONG ModuleInfoCount, PULONG ReturnLength)
 {
+    LogFunctionEntry();
+
     PEPROCESS process = NULL;
     PPEB peb = NULL;
     PLIST_ENTRY listEntry = NULL;
@@ -149,6 +163,7 @@ NTSTATUS GetLoadedModules(HANDLE ProcessId, PMODULE_INFO ModuleInfo, ULONG Modul
     status = PsLookupProcessByProcessId(ProcessId, &process);
     if (!NT_SUCCESS(status))
     {
+        LogMessage("Failed to lookup process by process ID. Error: 0x%X", status);
         return status;
     }
 
@@ -156,6 +171,7 @@ NTSTATUS GetLoadedModules(HANDLE ProcessId, PMODULE_INFO ModuleInfo, ULONG Modul
     peb = (PPEB)PsGetProcessWow64Process(process);
     if (peb == NULL)
     {
+        LogMessage("Failed to retrieve process PEB");
         ObDereferenceObject(process);
         return STATUS_UNSUCCESSFUL;
     }
@@ -186,23 +202,38 @@ NTSTATUS GetLoadedModules(HANDLE ProcessId, PMODULE_INFO ModuleInfo, ULONG Modul
     *ReturnLength = actualCount * sizeof(MODULE_INFO);
 
     ObDereferenceObject(process);
+
+    LogFunctionExit();
     return status;
 }
 
 NTSTATUS DispatchCreateClose(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
 {
+    LogFunctionEntry();
+
     UNREFERENCED_PARAMETER(pDeviceObject);
 
     pIrp->IoStatus.Status = STATUS_SUCCESS;
     pIrp->IoStatus.Information = 0;
 
+    // Check if the IRP is being canceled
+    if (pIrp->Cancel)
+    {
+        pIrp->IoStatus.Status = STATUS_CANCELLED;
+        IoCompleteRequest(pIrp, IO_NO_INCREMENT);
+        return STATUS_CANCELLED;
+    }
+
     IoCompleteRequest(pIrp, IO_NO_INCREMENT);
 
+    LogFunctionExit();
     return STATUS_SUCCESS;
 }
 
 NTSTATUS DispatchIoctl(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
 {
+    LogFunctionEntry();
+
     UNREFERENCED_PARAMETER(pDeviceObject);
 
     PIO_STACK_LOCATION pIoStackLocation = IoGetCurrentIrpStackLocation(pIrp);
@@ -213,9 +244,10 @@ NTSTATUS DispatchIoctl(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
 
     if (controlCode == IOCTL_GET_PROCESS_IDS)
     {
-        if (pIrp->AssociatedIrp.SystemBuffer == NULL || pIoStackLocation->Parameters.DeviceIoControl.OutputBufferLength < sizeof(PROCESS_INFO))
+        if (pIoStackLocation->Parameters.DeviceIoControl.OutputBufferLength < sizeof(PROCESS_INFO))
         {
-            status = STATUS_INVALID_PARAMETER;
+            LogMessage("Insufficient buffer size for process info");
+            status = STATUS_BUFFER_TOO_SMALL;
             goto Exit;
         }
 
@@ -223,50 +255,71 @@ NTSTATUS DispatchIoctl(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
         ULONG processInfoCount = pIoStackLocation->Parameters.DeviceIoControl.OutputBufferLength / sizeof(PROCESS_INFO);
 
         status = GetProcessIds(processInfo, processInfoCount, &returnLength);
-        if (!NT_SUCCESS(status))
+        if (status == STATUS_INFO_LENGTH_MISMATCH)
         {
-            goto Exit;
+            LogMessage("Insufficient buffer size for process info");
+            status = STATUS_BUFFER_TOO_SMALL;
         }
     }
     else if (controlCode == IOCTL_GET_MODULES)
     {
-        if (pIrp->AssociatedIrp.SystemBuffer == NULL || pIoStackLocation->Parameters.DeviceIoControl.InputBufferLength < sizeof(HANDLE) || pIoStackLocation->Parameters.DeviceIoControl.OutputBufferLength < sizeof(MODULE_INFO))
+        if (pIoStackLocation->Parameters.DeviceIoControl.InputBufferLength < sizeof(HANDLE) || pIoStackLocation->Parameters.DeviceIoControl.OutputBufferLength < sizeof(MODULE_INFO))
         {
-            status = STATUS_INVALID_PARAMETER;
+            LogMessage("Insufficient buffer size for module info");
+            status = STATUS_BUFFER_TOO_SMALL;
             goto Exit;
         }
 
         PHANDLE pProcessId = (PHANDLE)pIrp->AssociatedIrp.SystemBuffer;
-        PMODULE_INFO moduleInfo = (PMODULE_INFO)pIrp->AssociatedIrp.SystemBuffer;
+        PMODULE_INFO moduleInfo = (PMODULE_INFO)((PUCHAR)pIrp->AssociatedIrp.SystemBuffer + sizeof(HANDLE));
         ULONG moduleInfoCount = (pIoStackLocation->Parameters.DeviceIoControl.OutputBufferLength - sizeof(HANDLE)) / sizeof(MODULE_INFO);
 
-        status = GetLoadedModules(*pProcessId, moduleInfo, moduleInfoCount, &returnLength);
+        // Validate the process ID
+        PEPROCESS process = NULL;
+        status = PsLookupProcessByProcessId(*pProcessId, &process);
         if (!NT_SUCCESS(status))
         {
+            // Invalid process ID
+            LogMessage("Invalid process ID");
+            status = STATUS_INVALID_PARAMETER;
             goto Exit;
         }
-    }
 
-    status = STATUS_SUCCESS;
+        ObDereferenceObject(process);
+
+        status = GetLoadedModules(*pProcessId, moduleInfo, moduleInfoCount, &returnLength);
+        if (status == STATUS_INFO_LENGTH_MISMATCH)
+        {
+            LogMessage("Insufficient buffer size for module info");
+            status = STATUS_BUFFER_TOO_SMALL;
+        }
+    }
 
 Exit:
     pIrp->IoStatus.Status = status;
     pIrp->IoStatus.Information = returnLength;
     IoCompleteRequest(pIrp, IO_NO_INCREMENT);
 
+    LogFunctionExit();
     return status;
 }
 
 VOID DriverUnload(PDRIVER_OBJECT pDriverObject)
 {
+    LogFunctionEntry();
+
     UNICODE_STRING dosDeviceName;
     RtlInitUnicodeString(&dosDeviceName, L"\\DosDevices\\ModuleList");
     IoDeleteSymbolicLink(&dosDeviceName);
     IoDeleteDevice(pDriverObject->DeviceObject);
+
+    LogFunctionExit();
 }
 
 extern NTSTATUS DriverEntry(PDRIVER_OBJECT pDriverObject, PUNICODE_STRING pRegistryPath)
 {
+    LogFunctionEntry();
+
     UNREFERENCED_PARAMETER(pRegistryPath);
 
     NTSTATUS status;
@@ -284,6 +337,7 @@ extern NTSTATUS DriverEntry(PDRIVER_OBJECT pDriverObject, PUNICODE_STRING pRegis
     status = IoCreateDevice(pDriverObject, 0, &deviceName, FILE_DEVICE_UNKNOWN, FILE_DEVICE_SECURE_OPEN, FALSE, &pDeviceObject);
     if (!NT_SUCCESS(status))
     {
+        LogMessage("Failed to create device. Error: 0x%X", status);
         return status;
     }
 
@@ -293,9 +347,11 @@ extern NTSTATUS DriverEntry(PDRIVER_OBJECT pDriverObject, PUNICODE_STRING pRegis
     status = IoCreateSymbolicLink(&dosDeviceName, &deviceName);
     if (!NT_SUCCESS(status))
     {
+        LogMessage("Failed to create symbolic link. Error: 0x%X", status);
         IoDeleteDevice(pDeviceObject);
         return status;
     }
 
+    LogFunctionExit();
     return STATUS_SUCCESS;
 }
