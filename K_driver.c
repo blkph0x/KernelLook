@@ -3,15 +3,21 @@
 #include <ntimage.h>
 #include <wdm.h>
 #include <windef.h>
-
+#include <ntstrsafe.h>
 #define NTOSKRNL_LIB
 #pragma comment(lib, "Ntoskrnl.lib")
 
-#define IOCTL_GET_PROCESS_IDS CTL_CODE(FILE_DEVICE_UNKNOWN, 0x800, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_GET_MODULES CTL_CODE(FILE_DEVICE_UNKNOWN, 0x801, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_GET_PROCESS_IDS CTL_CODE(FILE_DEVICE_UNKNOWN, 0x800, METHOD_BUFFERED, FILE_READ_ACCESS)
+#define IOCTL_GET_MODULES CTL_CODE(FILE_DEVICE_UNKNOWN, 0x801, METHOD_BUFFERED, FILE_READ_ACCESS)
 
-#define MAX_PROCESS_INFO_COUNT 1000 // Maximum number of process info entries
-#define MAX_MODULE_INFO_COUNT 1000  // Maximum number of module info entries
+#define MAX_PROCESS_INFO_COUNT 4000 // Maximum number of process info entries
+#define MAX_MODULE_INFO_COUNT 4000  // Maximum number of module info entries
+#define MAX_PATH 260
+
+typedef struct _PROCESS_INFO {
+    HANDLE ProcessId;
+    WCHAR Name[MAX_PATH];
+} PROCESS_INFO, * PPROCESS_INFO;
 
 typedef struct _PEB_LDR_DATA {
     UCHAR Reserved1[8];
@@ -28,16 +34,14 @@ typedef struct _PEB
     PPEB_LDR_DATA Ldr;
     // other fields...
 } PEB, * PPEB;
-typedef struct _PROCESS_INFO {
-    HANDLE ProcessId;
-    WCHAR Name[MAX_PATH];
-} PROCESS_INFO, * PPROCESS_INFO;
+
 
 typedef struct _MODULE_INFO {
     PVOID Base;
     ULONG Size;
     WCHAR Name[MAX_PATH];
 } MODULE_INFO, * PMODULE_INFO;
+
 typedef enum _SYSTEM_INFORMATION_CLASS {
     SystemProcessInformation = 5
 } SYSTEM_INFORMATION_CLASS;
@@ -47,8 +51,8 @@ extern NTSTATUS PsLookupProcessByProcessId(
     OUT PEPROCESS* Process
 );
 
-extern NTSTATUS ZwQuerySystemInformation(
-    SYSTEM_INFORMATION_CLASS SystemInformationClass,
+extern NTSTATUS NtQuerySystemInformation(
+    IN SYSTEM_INFORMATION_CLASS SystemInformationClass,
     OUT PVOID SystemInformation,
     IN ULONG SystemInformationLength,
     OUT PULONG ReturnLength
@@ -56,6 +60,13 @@ extern NTSTATUS ZwQuerySystemInformation(
 
 extern PVOID PsGetProcessWow64Process(
     IN PEPROCESS Process
+);
+
+extern NTSTATUS NTAPI ZwQuerySystemInformation(
+    IN SYSTEM_INFORMATION_CLASS SystemInformationClass,
+    OUT PVOID SystemInformation,
+    IN ULONG SystemInformationLength,
+    OUT PULONG ReturnLength OPTIONAL
 );
 
 typedef struct _SYSTEM_PROCESS_INFORMATION {
@@ -93,60 +104,67 @@ NTSTATUS GetProcessIds(PPROCESS_INFO ProcessInfo, ULONG ProcessInfoCount, PULONG
 {
     LogFunctionEntry();
 
-    PVOID processInfoBuffer = NULL;
     NTSTATUS status = STATUS_SUCCESS;
     ULONG bufferSize = 0;
     ULONG actualCount = 0;
 
-    // Get size of the information to be gathered.
-    status = ZwQuerySystemInformation(SystemProcessInformation, NULL, 0, &bufferSize);
+    // Determine the required buffer size
+    status = NtQuerySystemInformation(SystemProcessInformation, NULL, 0, &bufferSize);
     if (status != STATUS_INFO_LENGTH_MISMATCH)
     {
         LogMessage("Failed to get process information size. Error: 0x%X", status);
         return status;
     }
 
-    // Allocate memory for the buffer.
-    processInfoBuffer = ExAllocatePoolWithTag(NonPagedPool, bufferSize, 'Proc');
+    LogMessage("Obtained required process info size: %lu", bufferSize);
+
+    // Allocate memory for the buffer
+    PVOID processInfoBuffer = ExAllocatePoolWithTag(NonPagedPool, bufferSize, 'Proc');
     if (processInfoBuffer == NULL)
     {
         LogMessage("Failed to allocate memory for process information");
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
-    // Get the system information.
-    status = ZwQuerySystemInformation(SystemProcessInformation, processInfoBuffer, bufferSize, NULL);
+    LogMessage("Successfully allocated memory for process info");
+
+    // Retrieve the process information
+    status = NtQuerySystemInformation(SystemProcessInformation, processInfoBuffer, bufferSize, &bufferSize);
     if (!NT_SUCCESS(status))
     {
-        LogMessage("Failed to query system information. Error: 0x%X", status);
+        LogMessage("Failed to get process info. Error: 0x%X", status);
         ExFreePool(processInfoBuffer);
         return status;
     }
 
-    PSYSTEM_PROCESS_INFORMATION processInfo = (PSYSTEM_PROCESS_INFORMATION)processInfoBuffer;
-    while (actualCount < ProcessInfoCount)
+    // Traverse the process information and copy to the output buffer
+    PSYSTEM_PROCESS_INFORMATION currentProcessInfo = (PSYSTEM_PROCESS_INFORMATION)processInfoBuffer;
+    while (currentProcessInfo != NULL && actualCount < ProcessInfoCount)
     {
-        ProcessInfo[actualCount].ProcessId = processInfo->ProcessId;
-        RtlCopyMemory(ProcessInfo[actualCount].Name, processInfo->ImageName.Buffer, processInfo->ImageName.Length);
-        ProcessInfo[actualCount].Name[processInfo->ImageName.Length / sizeof(WCHAR)] = UNICODE_NULL;
+        ProcessInfo[actualCount].ProcessId = currentProcessInfo->ProcessId;
+        RtlCopyMemory(ProcessInfo[actualCount].Name, currentProcessInfo->ImageName.Buffer, currentProcessInfo->ImageName.Length);
+        ProcessInfo[actualCount].Name[currentProcessInfo->ImageName.Length / sizeof(WCHAR)] = UNICODE_NULL;
+
+        LogMessage("Copied process info: ProcessId=%lu, Name=%ls", ProcessInfo[actualCount].ProcessId, ProcessInfo[actualCount].Name);
 
         actualCount++;
 
-        if (processInfo->NextEntryOffset == 0)
-        {
+        if (currentProcessInfo->NextEntryOffset == 0)
             break;
-        }
 
-        processInfo = (PSYSTEM_PROCESS_INFORMATION)((PUCHAR)processInfo + processInfo->NextEntryOffset);
+        currentProcessInfo = (PSYSTEM_PROCESS_INFORMATION)((PBYTE)currentProcessInfo + currentProcessInfo->NextEntryOffset);
     }
 
     *ReturnLength = actualCount * sizeof(PROCESS_INFO);
 
     ExFreePool(processInfoBuffer);
 
+    LogMessage("Completed process info retrieval");
+
     LogFunctionExit();
     return status;
 }
+
 
 NTSTATUS GetLoadedModules(HANDLE ProcessId, PMODULE_INFO ModuleInfo, ULONG ModuleInfoCount, PULONG ReturnLength)
 {
@@ -187,6 +205,8 @@ NTSTATUS GetLoadedModules(HANDLE ProcessId, PMODULE_INFO ModuleInfo, ULONG Modul
         ModuleInfo[actualCount].Size = ldrEntry->SizeOfImage;
         RtlCopyMemory(ModuleInfo[actualCount].Name, ldrEntry->FullDllName.Buffer, ldrEntry->FullDllName.Length);
         ModuleInfo[actualCount].Name[ldrEntry->FullDllName.Length / sizeof(WCHAR)] = UNICODE_NULL;
+
+        LogMessage("Copied module info: Base=%p, Size=%lu, Name=%ls", ModuleInfo[actualCount].Base, ModuleInfo[actualCount].Size, ModuleInfo[actualCount].Name);
 
         actualCount++;
 
@@ -244,6 +264,9 @@ NTSTATUS DispatchIoctl(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
 
     if (controlCode == IOCTL_GET_PROCESS_IDS)
     {
+        LogMessage("Input Buffer Length for IOCTL_GET_PROCESS_IDS: %lu", pIoStackLocation->Parameters.DeviceIoControl.InputBufferLength);
+        LogMessage("Output Buffer Length for IOCTL_GET_PROCESS_IDS: %lu", pIoStackLocation->Parameters.DeviceIoControl.OutputBufferLength);
+
         if (pIoStackLocation->Parameters.DeviceIoControl.OutputBufferLength < sizeof(PROCESS_INFO))
         {
             LogMessage("Insufficient buffer size for process info");
@@ -263,6 +286,9 @@ NTSTATUS DispatchIoctl(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
     }
     else if (controlCode == IOCTL_GET_MODULES)
     {
+        LogMessage("Input Buffer Length for IOCTL_GET_MODULES: %lu", pIoStackLocation->Parameters.DeviceIoControl.InputBufferLength);
+        LogMessage("Output Buffer Length for IOCTL_GET_MODULES: %lu", pIoStackLocation->Parameters.DeviceIoControl.OutputBufferLength);
+
         if (pIoStackLocation->Parameters.DeviceIoControl.InputBufferLength < sizeof(HANDLE) || pIoStackLocation->Parameters.DeviceIoControl.OutputBufferLength < sizeof(MODULE_INFO))
         {
             LogMessage("Insufficient buffer size for module info");
