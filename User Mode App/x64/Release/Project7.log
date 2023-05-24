@@ -1,7 +1,6 @@
 ﻿  UserApp.cpp
   Generating code
-  5 of 7 functions (71.4%) were compiled, the rest were copied from previous compilation.
-    0 functions were new in current compilation
-    0 functions had inline decision re-evaluated but remain unchanged
+  Previous IPDB not found, fall back to full compilation.
+  All 7 functions were compiled because no usable IPDB/IOBJ from previous compilation was found.
   Finished generating code
   Project7.vcxproj -> C:\Users\Blkph0x\Documents\GitHub\KernelLook\User Mode App\x64\Release\Project7.exe

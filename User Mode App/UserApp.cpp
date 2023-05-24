@@ -1,11 +1,11 @@
 #include <Windows.h>
 #include <stdio.h>
 
-#define IOCTL_GET_PROCESS_IDS CTL_CODE(FILE_DEVICE_UNKNOWN, 0x800, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_GET_MODULES CTL_CODE(FILE_DEVICE_UNKNOWN, 0x801, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_GET_PROCESS_IDS CTL_CODE(FILE_DEVICE_UNKNOWN, 0x800, METHOD_BUFFERED, FILE_READ_ACCESS)
+#define IOCTL_GET_MODULES CTL_CODE(FILE_DEVICE_UNKNOWN, 0x801, METHOD_BUFFERED, FILE_READ_ACCESS)
 
-#define MAX_PROCESS_INFO_COUNT 1000 // Maximum number of process info entries
-#define MAX_MODULE_INFO_COUNT 1000  // Maximum number of module info entries
+#define MAX_PROCESS_INFO_COUNT 8000 // Maximum number of process info entries
+#define MAX_MODULE_INFO_COUNT 4000  // Maximum number of module info entries
 
 typedef struct _PROCESS_INFO {
     HANDLE ProcessId;
@@ -71,7 +71,7 @@ int main()
     printf("Process Info:\n");
     for (DWORD i = 0; i < bytesReturned / sizeof(PROCESS_INFO); i++)
     {
-        printf("Process ID: %p, Name: %p\n", pProcessInfo[i].ProcessId, pProcessInfo[i].Name);
+        printf("Process ID: %p, Name: %ls\n", pProcessInfo[i].ProcessId, pProcessInfo[i].Name);
     }
     printf("\n");
 
