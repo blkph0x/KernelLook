@@ -1,4 +1,0 @@
-﻿  Building 'KMDF Driver5' with toolset 'WindowsKernelModeDriver10.0' and the 'Windows Driver' target platform.
-  K_driver.c
-  KMDF Driver5.vcxproj -> C:\Users\Blkph0x\Documents\GitHub\KernelLook\Driver\x64\Release\KMDFDriver5.sys
-  Driver is 'Windows Driver'.
