@@ -10,8 +10,8 @@
 #define IOCTL_GET_PROCESS_IDS CTL_CODE(FILE_DEVICE_UNKNOWN, 0x800, METHOD_BUFFERED, FILE_READ_ACCESS)
 #define IOCTL_GET_MODULES CTL_CODE(FILE_DEVICE_UNKNOWN, 0x801, METHOD_BUFFERED, FILE_READ_ACCESS)
 
-#define MAX_PROCESS_INFO_COUNT 4000 // Maximum number of process info entries
-#define MAX_MODULE_INFO_COUNT 4000  // Maximum number of module info entries
+#define MAX_PROCESS_INFO_COUNT 80000 // Maximum number of process info entries
+#define MAX_MODULE_INFO_COUNT 80000  // Maximum number of module info entries
 #define MAX_PATH 260
 
 typedef struct _PROCESS_INFO {

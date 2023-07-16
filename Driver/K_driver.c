@@ -10,8 +10,8 @@
 #define IOCTL_GET_PROCESS_IDS CTL_CODE(FILE_DEVICE_UNKNOWN, 0x800, METHOD_BUFFERED, FILE_READ_ACCESS)
 #define IOCTL_GET_MODULES CTL_CODE(FILE_DEVICE_UNKNOWN, 0x801, METHOD_BUFFERED, FILE_READ_ACCESS)
 
-#define MAX_PROCESS_INFO_COUNT 4000 // Maximum number of process info entries
-#define MAX_MODULE_INFO_COUNT 4000  // Maximum number of module info entries
+#define MAX_PROCESS_INFO_COUNT 80000 // Maximum number of process info entries
+#define MAX_MODULE_INFO_COUNT 80000  // Maximum number of module info entries
 #define MAX_PATH 260
 
 typedef struct _PROCESS_INFO {
@@ -115,8 +115,11 @@ NTSTATUS GetProcessIds(PPROCESS_INFO ProcessInfo, ULONG ProcessInfoCount, PULONG
         LogMessage("Failed to get process information size. Error: 0x%X", status);
         return status;
     }
+    // Log the returned buffer size
+    DbgPrint("Returned buffer size after first call: %lu\n", bufferSize);
 
     LogMessage("Obtained required process info size: %lu", bufferSize);
+
 
     // Allocate memory for the buffer
     PVOID processInfoBuffer = ExAllocatePoolWithTag(NonPagedPool, bufferSize, 'Proc');
@@ -273,7 +276,8 @@ NTSTATUS DispatchIoctl(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
             status = STATUS_BUFFER_TOO_SMALL;
             goto Exit;
         }
-
+        LogMessage("Input Buffer Length for IOCTL_GET_PROCESS_IDS: %lu", pIoStackLocation->Parameters.DeviceIoControl.InputBufferLength);
+        LogMessage("Output Buffer Length for IOCTL_GET_PROCESS_IDS: %lu", pIoStackLocation->Parameters.DeviceIoControl.OutputBufferLength);
         PPROCESS_INFO processInfo = (PPROCESS_INFO)pIrp->AssociatedIrp.SystemBuffer;
         ULONG processInfoCount = pIoStackLocation->Parameters.DeviceIoControl.OutputBufferLength / sizeof(PROCESS_INFO);
 
@@ -283,6 +287,8 @@ NTSTATUS DispatchIoctl(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
             LogMessage("Insufficient buffer size for process info");
             status = STATUS_BUFFER_TOO_SMALL;
         }
+        LogMessage("Input Buffer Length for IOCTL_GET_PROCESS_IDS: %lu", pIoStackLocation->Parameters.DeviceIoControl.InputBufferLength);
+        LogMessage("Output Buffer Length for IOCTL_GET_PROCESS_IDS: %lu", pIoStackLocation->Parameters.DeviceIoControl.OutputBufferLength);
     }
     else if (controlCode == IOCTL_GET_MODULES)
     {
@@ -295,7 +301,8 @@ NTSTATUS DispatchIoctl(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
             status = STATUS_BUFFER_TOO_SMALL;
             goto Exit;
         }
-
+        LogMessage("Input Buffer Length for IOCTL_GET_PROCESS_IDS: %lu", pIoStackLocation->Parameters.DeviceIoControl.InputBufferLength);
+        LogMessage("Output Buffer Length for IOCTL_GET_PROCESS_IDS: %lu", pIoStackLocation->Parameters.DeviceIoControl.OutputBufferLength);
         PHANDLE pProcessId = (PHANDLE)pIrp->AssociatedIrp.SystemBuffer;
         PMODULE_INFO moduleInfo = (PMODULE_INFO)((PUCHAR)pIrp->AssociatedIrp.SystemBuffer + sizeof(HANDLE));
         ULONG moduleInfoCount = (pIoStackLocation->Parameters.DeviceIoControl.OutputBufferLength - sizeof(HANDLE)) / sizeof(MODULE_INFO);
